@@ -1,0 +1,23 @@
+//PUD ASK Printer Caption File,,
+
+BeginSection,ErrMessage,
+Arial,18,100
+ERR_ID_4151,E-PCM-4151:Printer offline error. (Serial number: %s)Make sure that the printer is powered on and connected securely.If the error recurs, power off the printer and power it on again.
+ERR_ID_4152,E-PCM-4152:Printer door open. Close the door. (Serial number: %s)
+ERR_ID_4153,E-PCM-4153:Printer door open. Close the door. (Serial number: %s)
+ERR_ID_4154,E-PCM-4154:The ribbon or paper size does not match the print size configured in Printer Controller. (Serial number: %s)Replace the ribbon and paper with ones of the correct size.
+ERR_ID_4155,E-PCM-4155:Out of ribbon. Replace the ribbon. (Serial number: %s)
+ERR_ID_4156,E-PCM-4156:Out of paper. Replace the paper (roll). (Serial number: %s)
+ERR_ID_4157,E-PCM-4157:Ribbon jammed. Load the ribbon correctly. (Serial number: %s)
+ERR_ID_4158,E-PCM-4158:Paper jammed. Load the paper correctly. (Serial number: %s)
+ERR_ID_4159,E-PCM-4159:A mechanical error occurred on the printer. (Serial number: %s)Power off the printer and power it on again.
+ERR_ID_4160,E-PCM-4160:Printer Controller is not installed correctly. Check the application configuration. If the problem cannot be resolved, reinstall the application.
+ERR_ID_4161,E-PCM-4161:A software error occurred.Restart the system. If the error recurs, consult your technical representative.
+ERR_ID_4162,E-PCM-4162:Out of memory. Close any unnecessary applications, and try again. If the problem cannot be resolved, restart the system.
+ERR_ID_4163,E-PCM-4163:An error occurred during image processing. Retry printing.
+ERR_ID_4164,E-PCM-4164:No printer available to print the requested size. Check the size settings of maintenance application. System restart is required for the new settings to take effect.
+ERR_ID_4165,E-PCM-4165:Failed to load/save files. Restart the system. If the error recurs, consult your technical representative.
+ERR_ID_4166,E-PCM-4166:Printer is overheated. (Serial number: %s)Wait for cooling down.
+ERR_ID_4167,E-PCM-4167:Printer control panes is used. (Serial number: %s)Finish the operation.
+ERR_ID_4168,E-PCM-4168:Slug box is removed. (Serial number: %s)Attatch the slug box.
+EndSection,

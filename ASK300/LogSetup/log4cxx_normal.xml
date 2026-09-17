@@ -1,0 +1,115 @@
+﻿<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE log4j:configuration SYSTEM "log4j.dtd">
+<!--
+ Licensed to the Apache Software Foundation (ASF) under one or more
+ contributor license agreements.  See the NOTICE file distributed with
+ this work for additional information regarding copyright ownership.
+ The ASF licenses this file to You under the Apache License, Version 2.0
+ (the "License"); you may not use this file except in compliance with
+ the License.  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+
+-->
+
+<log4j:configuration debug="false" xmlns:log4j="http://jakarta.apache.org/log4j/">
+
+  <appender name="FILE" class="org.apache.log4j.DailyRollingFileAppender">        <!--日付基準でのrollingルール-->
+    <layout class="org.apache.log4cxx.PatternLayout">
+      <param name="ConversionPattern" value="%d %-5p [%t] %C{2} (%F:%L) - %m%n"/>
+    </layout>
+    <param name="append" value="true" />                          <!--上書きフラグ-->
+    <param name="datePattern" value="'.'yyyy-MM-dd-HH-mm.log" />  <!--ファイル名-->
+  </appender>
+  
+  <appender name="ASKDllLog" class="org.apache.log4j.rolling.RollingFileAppender">
+    <triggeringPolicy class="org.apache.log4j.rolling.SizeBasedTriggeringPolicy"> <!--サイズ基準でのrollingルール-->
+      <param name="maxFileSize" value="5MB"/>             <!--rollingサイズ-->
+    </triggeringPolicy>
+    
+    <rollingPolicy class="org.apache.log4j.rolling.FixedWindowRollingPolicy">
+      <param name="fileNamePattern" value="C:/PUD/Logs/PUD_ASKDll-%i.log"/>  <!--ログファイルパス（"-%i"は連番 ）-->
+      <param name="MinIndex" value="0"/>                   <!--連番の最小値-->
+      <param name="MaxIndex" value="9"/>                   <!--連番の最大値-->
+    </rollingPolicy>
+    
+    <layout class="org.apache.log4j.PatternLayout">
+      <param name="ConversionPattern" value="%d %-5p [%t] %C{2}::%M() (%L) - %m%n"/> <!--ログフォーマット-->
+    </layout>
+    <param name="Append" value="true"/>                 <!--ファイル上書き/追加-->
+  </appender>
+
+  <appender name="ASKSeparateSettingLog" class="org.apache.log4j.rolling.RollingFileAppender">
+    <triggeringPolicy class="org.apache.log4j.rolling.SizeBasedTriggeringPolicy">
+      <!--サイズ基準でのrollingルール-->
+      <param name="maxFileSize" value="5MB"/>
+      <!--rollingサイズ-->
+    </triggeringPolicy>
+
+    <rollingPolicy class="org.apache.log4j.rolling.FixedWindowRollingPolicy">
+      <param name="fileNamePattern" value="C:/PUD/Logs/PUD_ASKSeparateSheetSetting-%i.log"/>
+      <!--ログファイルパス（"-%i"は連番 ）-->
+      <param name="MinIndex" value="0"/>
+      <!--連番の最小値-->
+      <param name="MaxIndex" value="9"/>
+      <!--連番の最大値-->
+    </rollingPolicy>
+
+    <layout class="org.apache.log4j.PatternLayout">
+      <param name="ConversionPattern" value="%d %-5p [%t] %C{2}::%M() (%L) - %m%n"/>
+      <!--ログフォーマット-->
+    </layout>
+    <param name="Append" value="true"/>
+    <!--ファイル上書き/追加-->
+  </appender>
+
+  <appender name="ASKSettingLog" class="org.apache.log4j.rolling.RollingFileAppender">
+    <triggeringPolicy class="org.apache.log4j.rolling.SizeBasedTriggeringPolicy">
+      <!--サイズ基準でのrollingルール-->
+      <param name="maxFileSize" value="5MB"/>
+      <!--rollingサイズ-->
+    </triggeringPolicy>
+
+    <rollingPolicy class="org.apache.log4j.rolling.FixedWindowRollingPolicy">
+      <param name="fileNamePattern" value="C:/PUD/Logs/PUD_ASKSetting-%i.log"/>
+      <!--ログファイルパス（"-%i"は連番 ）-->
+      <param name="MinIndex" value="0"/>
+      <!--連番の最小値-->
+      <param name="MaxIndex" value="9"/>
+      <!--連番の最大値-->
+    </rollingPolicy>
+
+    <layout class="org.apache.log4j.PatternLayout">
+      <param name="ConversionPattern" value="%d %-5p [%t] %C{2}::%M() (%L) - %m%n"/>
+      <!--ログフォーマット-->
+    </layout>
+    <param name="Append" value="true"/>
+    <!--ファイル上書き/追加-->
+  </appender>
+
+
+  <logger name="ASKDll">                                <!--getLogger引数名-->
+    <priority value ="OFF" />                           <!--appenderに対応したレベルの設定-->
+    <level value ="warn"/>                              <!--ログ出力フィルタ(trace<debug<info<warn<error<fatal)-->
+    <appender-ref ref="ASKDllLog"/>                     <!--appender参照先-->
+  </logger>
+
+  <logger name="ASK_SepalateSheet_Setting">             <!--getLogger引数名-->
+    <priority value ="OFF" />                           <!--appenderに対応したレベルの設定-->
+    <level value ="warn"/>                              <!--ログ出力フィルタ(trace<debug<info<warn<error<fatal)-->
+    <appender-ref ref="ASKSeparateSettingLog"/>         <!--appender参照先-->
+  </logger>
+
+  <logger name="ASKSetting">                            <!--getLogger引数名-->
+    <priority value ="OFF" />                           <!--appenderに対応したレベルの設定-->
+    <level value ="warn"/>                              <!--ログ出力フィルタ(trace<debug<info<warn<error<fatal)-->
+    <appender-ref ref="ASKSettingLog"/>                 <!--appender参照先-->
+  </logger>
+
+</log4j:configuration>

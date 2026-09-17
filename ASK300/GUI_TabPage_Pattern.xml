@@ -1,0 +1,12 @@
+﻿<?xml version="1.0" encoding="utf-8" ?>
+<TabPage Width="212" Height="487">
+  <Button Tag="btnPauseRestart" Text="Next order pause" TextAlt="PauseRestart" Left="3" Top="429" Width="110" Height="23" />
+  <Button Tag="btnStopOrder" Text="Stop printing" Left="117" Top="429" Width="93" Height="23" />
+  <Button Tag="btnMaintenance" Text="Maintenance" Left="3" Top="458" Width="110" Height="23" />
+<!--  <Button Tag="btnPostOp" Text="Post-Op Check" Left="117" Top="458" Width="93" Height="23" /> -->
+  <Panel  Tag="pnlOnline"  Top="5" Left="5" Width="200" Height="50" />
+  <PictureBox Tag="pbxIcon" Src="ASK.bmp" Left="0" Top="0" Width="128" Height="48" />
+  <Panel  Tag="pnlPlugIn"  Top="60" Left="1" Width="210" Height="350" />  
+<!--  <Panel  Tag="pnlOffline"  Top="0" Left="0" Width="0" Height="0" /> -->
+<!--  <Button Tag="btnPreOp" Text="Pre-Op Check" Src="ASK_big.bmp" Left="35" Top="145" Width="145" Height="150" /> -->
+</TabPage>

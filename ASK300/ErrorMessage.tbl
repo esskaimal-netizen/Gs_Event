@@ -1,0 +1,374 @@
+;each section name matches the last four charactors of the ErrorID.
+
+[4101]
+Level=4
+ErrorID=E-PCM-4101
+DialogType=3
+Beep=2
+LogSave=1
+Display=1
+Message1=Printer offline error. (Serial number: %s)
+Message2=Make sure that the printer is powered on and connected securely.
+Message3=If the error recurs, power off the printer and power it on again.
+Buttons=2
+ButtonString1=Recovery
+ButtonString2=Offline
+ButtonKey1=0
+DefaultButton=1
+ReplyNotice=1
+GmbCtbCollect=0
+SubNumType=0
+
+[4102]
+Level=4
+ErrorID=E-PCM-4102
+DialogType=3
+Beep=2
+LogSave=1
+Display=1
+Message1=Printer door open. Close the door. (Serial number: %s)
+Buttons=2
+ButtonString1=Recovery
+ButtonString2=Offline
+ButtonKey1=0
+DefaultButton=1
+ReplyNotice=1
+GmbCtbCollect=0
+SubNumType=0
+
+[4103]
+Level=4
+ErrorID=E-PCM-4103
+DialogType=3
+Beep=2
+LogSave=1
+Display=1
+Message1=Printer door open. Close the door. (Serial number: %s)
+Buttons=2
+ButtonString1=Recovery
+ButtonString2=Offline
+ButtonKey1=0
+DefaultButton=1
+ReplyNotice=1
+GmbCtbCollect=0
+SubNumType=0
+
+[4104]
+Level=4
+ErrorID=E-PCM-4104
+DialogType=3
+Beep=2
+LogSave=1
+Display=1
+Message1=Either ribbon size or paper size does not match the print size. Replace the ribbon and paper with ones of the correct size.(Serial number: %s)
+Message2=If both the ribbon size and paper size are correct, power off the printer and power it on again.
+Message3=If the error recurs, please restart system.
+Buttons=2
+ButtonString1=Recovery
+ButtonString2=Offline
+ButtonKey1=0
+DefaultButton=1
+ReplyNotice=1
+GmbCtbCollect=0
+SubNumType=0
+
+[4105]
+Level=4
+ErrorID=E-PCM-4105
+DialogType=3
+Beep=2
+LogSave=1
+Display=1
+Message1=Out of ribbon. Replace the ribbon. (Serial number: %s)
+Buttons=2
+ButtonString1=Recovery
+ButtonString2=Offline
+ButtonKey1=0
+DefaultButton=1
+ReplyNotice=1
+GmbCtbCollect=0
+SubNumType=0
+
+[4106]
+Level=4
+ErrorID=E-PCM-4106
+DialogType=3
+Beep=2
+LogSave=1
+Display=1
+Message1=Out of paper. Replace the paper (roll). (Serial number: %s)
+Buttons=2
+ButtonString1=Recovery
+ButtonString2=Offline
+ButtonKey1=0
+DefaultButton=1
+ReplyNotice=1
+GmbCtbCollect=0
+SubNumType=0
+
+[4107]
+Level=4
+ErrorID=E-PCM-4107
+DialogType=3
+Beep=2
+LogSave=1
+Display=1
+Message1=Ribbon jammed. Load the ribbon correctly. (Serial number: %s)
+Buttons=2
+ButtonString1=Recovery
+ButtonString2=Offline
+ButtonKey1=0
+DefaultButton=1
+ReplyNotice=1
+GmbCtbCollect=0
+SubNumType=0
+
+[4108]
+Level=4
+ErrorID=E-PCM-4108
+DialogType=3
+Beep=2
+LogSave=1
+Display=1
+Message1=Paper jammed. Load the paper correctly. (Serial number: %s)
+Buttons=2
+ButtonString1=Recovery
+ButtonString2=Offline
+ButtonKey1=0
+DefaultButton=1
+ReplyNotice=1
+GmbCtbCollect=0
+SubNumType=0
+
+[4109]
+Level=4
+ErrorID=E-PCM-4109
+DialogType=3
+Beep=2
+LogSave=1
+Display=1
+Message1=A mechanical error occurred on the printer. (Serial number: %s)
+Message2=Power off the printer and power it on again.
+Buttons=2
+ButtonString1=Recovery
+ButtonString2=Offline
+ButtonKey1=0
+DefaultButton=1
+ReplyNotice=1
+GmbCtbCollect=0
+SubNumType=0
+
+[4110]
+Level=4
+ErrorID=E-PCM-4110
+DialogType=1
+Beep=2
+LogSave=1
+Display=1
+Message1=Printer Controller is not installed correctly.
+Message2=Check the application configuration.
+Message3=If the problem cannot be resolved, reinstall the application.
+Buttons=1
+ButtonString1=OK
+ButtonKey1=0
+DefaultButton=1
+ReplyNotice=1
+GmbCtbCollect=0
+SubNumType=0
+
+[4111]
+Level=4
+ErrorID=E-PCM-4111
+DialogType=1
+Beep=2
+LogSave=1
+Display=1
+Message1=A software error occurred.
+Message2=System restart is required in order to print again.
+Message3=If the error recurs, consult your technical representative.
+Buttons=1
+ButtonString1=OK
+ButtonKey1=0
+DefaultButton=1
+ReplyNotice=1
+GmbCtbCollect=0
+SubNumType=0
+
+[4112]
+Level=4
+ErrorID=E-PCM-4112
+DialogType=1
+Beep=2
+LogSave=1
+Display=1
+Message1=Insufficient memory to continue printing.
+Message2=System restart is required in order to print again.
+Message3=If the error recurs, consult your technical representative.
+Buttons=1
+ButtonString1=OK
+ButtonKey1=0
+DefaultButton=1
+ReplyNotice=1
+GmbCtbCollect=0
+SubNumType=0
+
+[4113]
+Level=4
+ErrorID=E-PCM-4113
+DialogType=1
+Beep=2
+LogSave=1
+Display=1
+Message1=An error occurred during image processing. Retry printing.
+Buttons=1
+ButtonString1=OK
+ButtonKey1=0
+DefaultButton=1
+ReplyNotice=1
+GmbCtbCollect=0
+SubNumType=0
+
+[4114]
+Level=4
+ErrorID=E-PCM-4114
+DialogType=1
+Beep=2
+LogSave=1
+Display=1
+Message1=No printer available to print the requested size.
+Message2=Check the size settings of maintenance application.
+Message3=System restart is required for the new settings to take effect.
+Buttons=1
+ButtonString1=OK
+ButtonKey1=0
+DefaultButton=1
+ReplyNotice=1
+GmbCtbCollect=0
+SubNumType=0
+
+[4115]
+Level=4
+ErrorID=E-PCM-4115
+DialogType=1
+Beep=2
+LogSave=1
+Display=1
+Message1=Failed to load/save files.
+Message2=System restart is required in order to print again.
+Message3=If the error recurs, consult your technical representative.
+Buttons=1
+ButtonString1=OK
+ButtonKey1=0
+DefaultButton=1
+ReplyNotice=1
+GmbCtbCollect=0
+SubNumType=0
+
+[4116]
+Level=4
+ErrorID=E-PCM-4116
+DialogType=0
+Beep=2
+LogSave=1
+Display=1
+Message1=Printer is overheated. (Serial number: %s)
+Message2=Wait for cooling down.
+Buttons=1
+ButtonString1=OK
+ButtonKey1=0
+DefaultButton=1
+ReplyNotice=1
+GmbCtbCollect=0
+SubNumType=0
+
+[4117]
+Level=4
+ErrorID=E-PCM-4117
+DialogType=3
+Beep=2
+LogSave=1
+Display=1
+Message1=Printer control panes is used. (Serial number: %s)
+Message2=Finish the operation.
+Buttons=2
+ButtonString1=Recovery
+ButtonString2=Offline
+ButtonKey1=0
+DefaultButton=1
+ReplyNotice=1
+GmbCtbCollect=0
+SubNumType=0
+
+[4118]
+Level=4
+ErrorID=E-PCM-4118
+DialogType=3
+Beep=2
+LogSave=1
+Display=1
+Message1=Slug box is removed. (Serial number: %s)
+Message2=Attatch the slug box.
+Buttons=2
+ButtonString1=Recovery
+ButtonString2=Offline
+ButtonKey1=0
+DefaultButton=1
+ReplyNotice=1
+GmbCtbCollect=0
+SubNumType=0
+
+[4119]
+Level=4
+ErrorID=E-PCM-4119
+DialogType=1
+Beep=2
+LogSave=1
+Display=1
+Message1=The print size is incorrect. (Serial number: %s)
+Message2=Specify an available print size and retry printing.
+Buttons=1
+ButtonString1=OK
+ButtonKey1=0
+DefaultButton=1
+ReplyNotice=1
+GmbCtbCollect=0
+SubNumType=0
+
+[4120]
+Level=4
+ErrorID=E-PCM-4120
+DialogType=1
+Beep=2
+LogSave=1
+Display=1
+Message1=The ribbon is incorrect. (Serial number: %s)
+Message2=Please set the genuine product.
+Message3=
+Buttons=1
+ButtonString1=OK
+ButtonKey1=0
+DefaultButton=1
+ReplyNotice=1
+GmbCtbCollect=0
+SubNumType=0
+
+[4121]
+Level=4
+ErrorID=E-PCM-4121
+DialogType=1
+Beep=2
+LogSave=1
+Display=1
+Message1=Printer is overheated for a long time. (Serial number: %s)
+Message2=Wait for cooling down.
+Message3=System restart is required in order to print again.
+Buttons=1
+ButtonString1=OK
+ButtonKey1=0
+DefaultButton=1
+ReplyNotice=1
+GmbCtbCollect=0
+SubNumType=0
+
+[SerialNumber]
+Unknown=Unknown

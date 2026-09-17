@@ -1,0 +1,22 @@
+﻿<?xml version="1.0" encoding="utf-8" ?>
+<CodeDefine>
+  <ManualFeed>
+    <Item Key="0">Disable</Item>
+    <Item Key="1">Enable</Item>
+  </ManualFeed>
+  <LongScale>
+    <Item Key="0">Unsupported</Item>
+    <Item Key="1">Supported</Item>
+  </LongScale>
+  <TwoSidedPrint>
+    <Item Key="0">Disable</Item>
+    <Item Key="1">Enable</Item>
+  </TwoSidedPrint>
+  <PrinterStatus>
+    <Item Key="0">Offline</Item>
+    <Item Key="1">Waiting</Item>
+    <Item Key="2">Busy</Item>
+    <Item Key="3">Printing</Item>
+    <Item Key="4">Error</Item>
+  </PrinterStatus>
+</CodeDefine>
