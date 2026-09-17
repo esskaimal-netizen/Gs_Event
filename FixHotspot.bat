@@ -57,15 +57,21 @@ timeout /t 3 /nobreak >nul
 
 echo.
 echo  ============================================================
-echo    AFTER ENABLING HOTSPOT IN SETTINGS:
+echo    HOW TO CONNECT MOBILES:
 echo.
-echo    1. Note the WiFi Name and Password shown in Settings
-echo    2. On your mobile: Settings - WiFi - connect to that name
-echo    3. Once connected, open browser and go to:
+echo    OPTION A (Normal Wi-Fi Router / Personal Hotspot):
+echo    1. Connect both mobile phones to the SAME Wi-Fi network as this PC.
+echo    2. Open your mobile browser and go to your PC's IP address (e.g.):
+echo       http://192.168.137.74:8080/customer
 echo.
+echo    OPTION B (Windows PC Mobile Hotspot):
+echo    1. Enable Windows Mobile Hotspot in Settings.
+echo    2. Connect your mobile phones to that hotspot name.
+echo    3. Open mobile browser to:
 echo       http://192.168.137.1:8080/customer
 echo.
-echo    (If 192.168.137.1 doesn't work, try other IPs listed above)
+echo    IMPORTANT TIP: If your phone prompts "Wi-Fi has no internet",
+echo    choose "Stay connected to Wi-Fi" or temporarily disable Mobile Data.
 echo  ============================================================
 echo.
 

@@ -9,20 +9,52 @@ $listener.Prefixes.Add("http://+:$port/")  # + listens on all interfaces (needed
 # Each item: @{ id; imageData (base64); timestamp }
 $script:evtQueue = [System.Collections.Generic.List[hashtable]]::new()
 
+$script:mobileUploadDir = Join-Path $PSScriptRoot "Mobile_Uploads"
+if (-not (Test-Path $script:mobileUploadDir)) {
+    try { [System.IO.Directory]::CreateDirectory($script:mobileUploadDir) | Out-Null } catch {}
+}
+
 # Helper: get primary local IPv4
 function Get-LocalIP {
     try {
+        # 1. First check if there is an active default gateway route (Wi-Fi or LAN)
+        $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+                 Sort-Object RouteMetric | Select-Object -First 1
+        if ($route) {
+            $ip = Get-NetIPAddress -InterfaceIndex $route.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                  Where-Object { $_.IPAddress -notmatch '^(127\.|169\.254\.)' } |
+                  Select-Object -ExpandProperty IPAddress -First 1
+            if ($ip) { return $ip }
+        }
+
+        # 2. Check if Windows Mobile Hotspot is active (192.168.137.1)
+        $hs = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+              Where-Object { $_.IPAddress -eq '192.168.137.1' } |
+              Select-Object -ExpandProperty IPAddress -First 1
+        if ($hs) { return $hs }
+
+        # 3. Fallback to any valid IPv4 address
         $ips = [System.Net.Dns]::GetHostAddresses([System.Net.Dns]::GetHostName()) |
-               Where-Object { $_.AddressFamily -eq 'InterNetwork' -and $_.ToString() -notmatch '^127\.' } |
+               Where-Object { $_.AddressFamily -eq 'InterNetwork' -and $_.ToString() -notmatch '^(127\.|169\.254\.)' } |
                Select-Object -ExpandProperty IPAddressToString
         if ($ips) {
-            # Prefer Hotspot IP for mobile customer access if active
-            $hs = $ips | Where-Object { $_ -eq "192.168.137.1" } | Select-Object -First 1
-            if ($hs) { return $hs }
-            return $ips | Select-Object -First 1
+            $valid = $ips | Where-Object { $_ -notmatch '^(127\.|169\.254\.)' } | Select-Object -First 1
+            if ($valid) { return $valid }
         }
     } catch {}
-    return "localhost"
+    return "127.0.0.1"
+}
+
+# Helper: get active Wi-Fi SSID
+function Get-ConnectedWifiSsid {
+    try {
+        $netsh = netsh wlan show interfaces
+        $line = $netsh | Where-Object { $_ -match '^\s*SSID\s*:\s*(.+)$' } | Select-Object -First 1
+        if ($line -match '^\s*SSID\s*:\s*(.+)$') {
+            return $Matches[1].Trim()
+        }
+    } catch {}
+    return ""
 }
 
 # Helper: get all IPv4 addresses on all interfaces (LAN, Wi-Fi, Hotspot)
@@ -30,12 +62,13 @@ function Get-AllLocalIPs {
     $list = @()
     try {
         $ips = [System.Net.Dns]::GetHostAddresses([System.Net.Dns]::GetHostName()) |
-               Where-Object { $_.AddressFamily -eq 'InterNetwork' -and $_.ToString() -notmatch '^127\.' } |
+               Where-Object { $_.AddressFamily -eq 'InterNetwork' -and $_.ToString() -notmatch '^(127\.|169\.254\.)' } |
                Select-Object -ExpandProperty IPAddressToString
         if ($ips) { $list = @($ips) }
     } catch {}
     return $list
 }
+
 
 function Invoke-FujifilmPrint {
     param (
@@ -355,13 +388,27 @@ while ($listener.IsListening) {
         $request = $context.Request
         $response = $context.Response
 
+        # Disable keep-alive to release socket immediately for other concurrent mobile clients
+        $response.KeepAlive = $false
+        try { $response.Headers.Add("Access-Control-Allow-Origin", "*") } catch {}
+        try { $response.Headers.Add("Access-Control-Allow-Methods", "GET, POST, OPTIONS") } catch {}
+        try { $response.Headers.Add("Access-Control-Allow-Headers", "*") } catch {}
+
+        # Handle CORS preflight
+        if ($request.HttpMethod -eq "OPTIONS") {
+            $response.StatusCode = 200
+            $response.Close()
+            continue
+        }
+
         $url = $request.Url.LocalPath
 
-        # GET /api/info - return local IP, all IPs, and default printer for QR generation
+        # GET /api/info - return local IP, all IPs, Wi-Fi SSID, and default printer for QR generation
         if ($request.HttpMethod -eq "GET" -and $url -eq "/api/info") {
             $allIps = Get-AllLocalIPs
             $hotspotIp = ($allIps | Where-Object { $_ -eq "192.168.137.1" } | Select-Object -First 1)
             $localIP = Get-LocalIP
+            $wifiSsid = Get-ConnectedWifiSsid
 
             # Detect default Windows printer name
             $defaultPrinter = ""
@@ -376,12 +423,12 @@ while ($listener.IsListening) {
                 allIps         = $allIps
                 hotspotIp      = if ($hotspotIp) { $hotspotIp } else { "" }
                 hasHotspot     = [bool]$hotspotIp
+                wifiSsid       = $wifiSsid
                 defaultPrinter = $defaultPrinter
                 ask300Sdk      = [bool]$script:ask300Available
             } | ConvertTo-Json
             $response.StatusCode = 200
             $response.ContentType = "application/json; charset=utf-8"
-            $response.Headers.Add("Access-Control-Allow-Origin", "*")
             $resBytes = [System.Text.Encoding]::UTF8.GetBytes($responseJson)
             $response.OutputStream.Write($resBytes, 0, $resBytes.Length)
             $response.OutputStream.Close()
@@ -530,30 +577,140 @@ while ($listener.IsListening) {
             }
         }
 
-        # POST /api/event-upload - receive photo from customer mobile
+        # POST /api/event-upload - receive photo(s) from customer mobile (single or batch)
         if ($request.HttpMethod -eq "POST" -and $url -eq "/api/event-upload") {
-            $reader = New-Object System.IO.StreamReader($request.InputStream)
+            $reader = New-Object System.IO.StreamReader($request.InputStream, [System.Text.Encoding]::UTF8)
             $body = $reader.ReadToEnd()
             $reader.Close()
             $data = ConvertFrom-Json $body
 
-            $newId = [System.Guid]::NewGuid().ToString()
-            $item  = @{
-                id        = $newId
-                imageData = $data.imageData   # base64 data URL from customer
-                timestamp = [System.DateTime]::UtcNow.ToString("o")
-            }
-            $script:evtQueue.Add($item)
+            $uploadedList = @()
+            $imagesToProcess = @()
 
-            Write-Host "[EVENT] Photo received from customer. Queue size: $($script:evtQueue.Count)" -ForegroundColor Cyan
+            if ($data.images -and $data.images.Count -gt 0) {
+                $imagesToProcess = @($data.images)
+            } elseif ($data.imageData) {
+                $imagesToProcess = @($data)
+            }
+
+            $dateStamp = Get-Date -Format "yyyyMMdd_HHmmss"
+
+            foreach ($imgObj in $imagesToProcess) {
+                try {
+                    $rawBase64 = $imgObj.imageData
+                    if (-not $rawBase64) { continue }
+                    $cleanBase64 = $rawBase64
+                    if ($rawBase64 -match '^data:image/[^;]+;base64,(.+)$') {
+                        $cleanBase64 = $Matches[1]
+                    }
+                    $imgBytes = [System.Convert]::FromBase64String($cleanBase64)
+                    $newId = [System.Guid]::NewGuid().ToString()
+                    $shortId = $newId.Substring(0, 8)
+
+                    $customName = if ($imgObj.filename) { [System.IO.Path]::GetFileNameWithoutExtension($imgObj.filename) -replace '[^a-zA-Z0-9_\-]', '_' } else { "" }
+                    $fileBase = if ($customName) { "mobile_${dateStamp}_${customName}_${shortId}.jpg" } else { "mobile_${dateStamp}_${shortId}.jpg" }
+                    $savePath = [System.IO.Path]::Combine($script:mobileUploadDir, $fileBase)
+
+                    [System.IO.File]::WriteAllBytes($savePath, $imgBytes)
+
+                    $qty = if ($imgObj.qty -and [int]$imgObj.qty -gt 0) { [int]$imgObj.qty } else { 1 }
+
+                    $item = @{
+                        id        = $newId
+                        fileName  = $fileBase
+                        filePath  = $savePath
+                        url       = "/api/mobile-photo?path=" + [System.Uri]::EscapeDataString($savePath)
+                        imageData = $rawBase64
+                        fileSize  = $imgBytes.Length
+                        timestamp = [System.DateTime]::UtcNow.ToString("o")
+                        qty       = $qty
+                        source    = "mobile"
+                    }
+                    $script:evtQueue.Add($item)
+                    $uploadedList += @{ id = $newId; fileName = $fileBase; url = $item.url; qty = $qty }
+
+                    Write-Host "[MOBILE UPLOAD] Saved: $fileBase ($([Math]::Round($imgBytes.Length / 1024)) KB) | Queue: $($script:evtQueue.Count)" -ForegroundColor Green
+                } catch {
+                    Write-Host "[MOBILE UPLOAD ERROR] Failed processing image: $_" -ForegroundColor Red
+                }
+            }
 
             $response.StatusCode = 200
             $response.ContentType = "application/json; charset=utf-8"
-            $response.Headers.Add("Access-Control-Allow-Origin", "*")
-            $resBytes = [System.Text.Encoding]::UTF8.GetBytes((@{ status="ok"; id=$newId } | ConvertTo-Json))
+            $resBytes = [System.Text.Encoding]::UTF8.GetBytes((@{ status="ok"; count=$uploadedList.Count; items=$uploadedList } | ConvertTo-Json -Depth 3))
             $response.OutputStream.Write($resBytes, 0, $resBytes.Length)
             $response.OutputStream.Close()
             continue
+        }
+
+        # GET /api/mobile-photos - List recent mobile photos for Studio Pro and Event modes
+        if ($request.HttpMethod -eq "GET" -and $url -eq "/api/mobile-photos") {
+            $response.ContentType = "application/json; charset=utf-8"
+            $response.Headers.Add("Cache-Control", "no-cache")
+
+            # Collect active items from queue
+            $items = @()
+            foreach ($q in $script:evtQueue) {
+                $items += @{
+                    id        = $q.id
+                    fileName  = $q.fileName
+                    filePath  = $q.filePath
+                    url       = $q.url
+                    fileSize  = if ($q.fileSize) { [int]$q.fileSize } else { 0 }
+                    timestamp = $q.timestamp
+                    qty       = if ($q.qty) { [int]$q.qty } else { 1 }
+                    inQueue   = $true
+                }
+            }
+
+            # Also scan directory for any photos not in memory queue (up to 50 newest)
+            if (Test-Path $script:mobileUploadDir) {
+                $dirFiles = Get-ChildItem -Path $script:mobileUploadDir -Filter "*.jpg" -ErrorAction SilentlyContinue |
+                            Sort-Object LastWriteTime -Descending | Select-Object -First 50
+                $knownPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+                foreach ($it in $items) { if ($it.filePath) { $knownPaths.Add($it.filePath) | Out-Null } }
+
+                foreach ($df in $dirFiles) {
+                    if (-not $knownPaths.Contains($df.FullName)) {
+                        $items += @{
+                            id        = "file_" + $df.Name
+                            fileName  = $df.Name
+                            filePath  = $df.FullName
+                            url       = "/api/mobile-photo?path=" + [System.Uri]::EscapeDataString($df.FullName)
+                            fileSize  = $df.Length
+                            timestamp = $df.LastWriteTime.ToString("o")
+                            qty       = 1
+                            inQueue   = $false
+                        }
+                    }
+                }
+            }
+
+            $json = @{
+                total = $items.Count
+                files = $items
+            } | ConvertTo-Json -Depth 4
+            $resBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+            $response.OutputStream.Write($resBytes, 0, $resBytes.Length)
+            $response.OutputStream.Close()
+            continue
+        }
+
+        # GET /api/mobile-photo - Safely serve saved mobile photo image
+        if ($request.HttpMethod -eq "GET" -and $url -eq "/api/mobile-photo") {
+            $filePath = $request.QueryString["path"]
+            if ($filePath -and (Test-Path $filePath)) {
+                $response.ContentType = "image/jpeg"
+                $response.Headers.Add("Cache-Control", "public, max-age=3600")
+                $fileBytes = [System.IO.File]::ReadAllBytes($filePath)
+                $response.OutputStream.Write($fileBytes, 0, $fileBytes.Length)
+                $response.OutputStream.Close()
+                continue
+            } else {
+                $response.StatusCode = 404
+                $response.Close()
+                continue
+            }
         }
 
         # GET /api/event-queue - return pending items to operator station
@@ -602,187 +759,495 @@ while ($listener.IsListening) {
 <title>GrandStores Photo Print</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0;}
-  :root{--bg:#0b0f19;--card:rgba(20,30,54,0.9);--primary:#06b6d4;--accent:#eab308;--text:#f8fafc;--muted:#64748b;--success:#10b981;--error:#ef4444;}
-  body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:1.5rem;background-image:radial-gradient(at 20% 10%,rgba(6,182,212,.18) 0,transparent 50%),radial-gradient(at 80% 90%,rgba(234,179,8,.12) 0,transparent 50%);}
-  .card{background:var(--card);border:1px solid rgba(255,255,255,.08);border-radius:20px;padding:2rem 1.75rem;width:100%;max-width:400px;display:flex;flex-direction:column;align-items:center;gap:1.25rem;backdrop-filter:blur(16px);}
-  .logo{font-size:2.5rem;margin-bottom:.25rem;}
-  .brand{font-size:1rem;font-weight:700;letter-spacing:.1em;color:var(--primary);}
-  .sub{font-size:.78rem;color:var(--muted);}
+  :root{--bg:#0b0f19;--card:rgba(20,30,54,0.92);--primary:#06b6d4;--accent:#eab308;--text:#f8fafc;--muted:#94a3b8;--success:#10b981;--error:#ef4444;--border:rgba(255,255,255,.1);}
+  body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;min-height:100dvh;display:flex;flex-direction:column;align-items:center;padding:1rem;background-image:radial-gradient(at 10% 10%,rgba(6,182,212,.18) 0,transparent 50%),radial-gradient(at 90% 90%,rgba(234,179,8,.12) 0,transparent 50%);}
+  .app-container{width:100%;max-width:480px;display:flex;flex-direction:column;gap:1rem;flex:1;}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:20px;padding:1.5rem 1.25rem;display:flex;flex-direction:column;align-items:center;gap:1.1rem;backdrop-filter:blur(16px);box-shadow:0 8px 32px rgba(0,0,0,.3);}
+  .brand-header{display:flex;align-items:center;gap:.6rem;margin-bottom:.25rem;}
+  .logo-badge{width:38px;height:38px;border-radius:10px;background:linear-gradient(135deg,#06b6d4,#0891b2);display:flex;align-items:center;justify-content:center;font-size:1.3rem;}
+  .brand{font-size:1.1rem;font-weight:800;letter-spacing:.08em;color:var(--primary);}
+  .sub{font-size:.75rem;color:var(--muted);text-align:center;}
   h2{font-size:1.25rem;font-weight:700;text-align:center;}
-  p{font-size:.85rem;color:var(--muted);text-align:center;line-height:1.5;}
-  .btn{width:100%;padding:.9rem;border:none;border-radius:12px;font-size:1rem;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:.5rem;transition:all .2s;}
-  .btn-primary{background:var(--primary);color:#fff;}
-  .btn-primary:active{background:#0891b2;}
-  .btn-accent{background:var(--accent);color:#000;}
-  .btn-accent:active{background:#ca8a04;}
-  .btn-ghost{background:rgba(255,255,255,.06);color:var(--text);border:1px solid rgba(255,255,255,.12);}
-  .preview-wrap{width:100%;border-radius:12px;overflow:hidden;background:#000;max-height:50dvh;display:flex;align-items:center;justify-content:center;}
-  #previewImg{width:100%;height:auto;max-height:50dvh;object-fit:contain;display:block;}
-  .sliders{width:100%;display:flex;flex-direction:column;gap:.65rem;}
-  .slider-row{display:flex;align-items:center;gap:.6rem;}
-  .slider-lbl{font-size:.75rem;color:var(--muted);width:72px;flex-shrink:0;}
-  input[type=range]{flex:1;height:4px;border-radius:2px;appearance:none;background:rgba(255,255,255,.15);outline:none;}
-  input[type=range]::-webkit-slider-thumb{appearance:none;width:18px;height:18px;border-radius:50%;background:var(--accent);cursor:pointer;border:2px solid rgba(0,0,0,.3);}
-  .slider-val{font-size:.72rem;color:var(--text);width:30px;text-align:right;font-family:monospace;}
-  .status{padding:.65rem 1rem;border-radius:10px;font-size:.85rem;text-align:center;width:100%;}
-  .status-ok{background:rgba(16,185,129,.15);color:var(--success);border:1px solid rgba(16,185,129,.25);}
-  .status-err{background:rgba(239,68,68,.12);color:var(--error);border:1px solid rgba(239,68,68,.2);}
-  .spinner{display:inline-block;width:18px;height:18px;border:3px solid rgba(255,255,255,.2);border-top-color:#fff;border-radius:50%;animation:spin .8s linear infinite;}
+  p{font-size:.85rem;color:var(--muted);text-align:center;line-height:1.45;}
+  .btn{width:100%;padding:.85rem 1.2rem;border:none;border-radius:12px;font-size:.95rem;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:.5rem;transition:all .2s;text-decoration:none;-webkit-tap-highlight-color:transparent;}
+  .btn-primary{background:linear-gradient(135deg,#06b6d4,#0284c7);color:#fff;box-shadow:0 4px 14px rgba(6,182,212,.35);}
+  .btn-primary:active{transform:scale(.98);}
+  .btn-accent{background:linear-gradient(135deg,#eab308,#ca8a04);color:#000;box-shadow:0 4px 14px rgba(234,179,8,.3);}
+  .btn-accent:active{transform:scale(.98);}
+  .btn-ghost{background:rgba(255,255,255,.06);color:var(--text);border:1px solid var(--border);}
+  .btn-ghost:active{background:rgba(255,255,255,.12);}
+  .btn-sm{padding:.4rem .7rem;font-size:.78rem;border-radius:8px;}
+  .btn-icon{width:34px;height:34px;padding:0;border-radius:8px;font-size:.9rem;}
+  .info-box{background:rgba(6,182,212,.08);border:1px solid rgba(6,182,212,.2);border-radius:12px;padding:.75rem 1rem;font-size:.8rem;color:#cbd5e1;line-height:1.4;display:flex;align-items:center;gap:.6rem;width:100%;}
+  .screen{display:none;width:100%;flex-direction:column;gap:1rem;}
+  .screen.active{display:flex;}
+
+  /* Gallery Grid */
+  .gallery-header{display:flex;justify-content:space-between;align-items:center;width:100%;padding:.25rem 0;}
+  .gallery-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:.75rem;width:100%;}
+  .photo-card{background:rgba(255,255,255,.04);border:2px solid transparent;border-radius:14px;overflow:hidden;position:relative;display:flex;flex-direction:column;transition:border-color .2s;}
+  .photo-card.selected{border-color:var(--primary);}
+  .photo-thumb-wrap{position:relative;width:100%;aspect-ratio:1;background:#000;overflow:hidden;cursor:pointer;}
+  .photo-thumb{width:100%;height:100%;object-fit:cover;display:block;transition:transform .2s;}
+  .photo-check{position:absolute;top:6px;right:6px;width:26px;height:26px;border-radius:50%;background:rgba(0,0,0,.6);border:2px solid #fff;display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:2;color:#fff;font-size:.8rem;}
+  .photo-card.selected .photo-check{background:var(--primary);border-color:var(--primary);}
+  .photo-actions{display:flex;justify-content:space-between;align-items:center;padding:.5rem .6rem;background:rgba(0,0,0,.35);}
+  .qty-ctrl{display:inline-flex;align-items:center;background:rgba(255,255,255,.08);border-radius:6px;overflow:hidden;}
+  .qty-btn{background:transparent;border:none;color:#fff;width:22px;height:24px;font-size:.85rem;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+  .qty-val{font-size:.78rem;font-weight:700;min-width:18px;text-align:center;font-family:monospace;}
+  .photo-btn-bar{display:flex;gap:.3rem;}
+
+  /* Bottom sticky bar */
+  .sticky-bar{position:sticky;bottom:0;left:0;right:0;background:rgba(11,15,25,.95);border-top:1px solid var(--border);padding:.8rem 0;z-index:10;backdrop-filter:blur(12px);margin-top:auto;}
+  .badge{background:var(--primary);color:#000;font-weight:800;font-size:.72rem;padding:2px 7px;border-radius:10px;margin-left:4px;}
+
+  /* Modal */
+  .modal-wrap{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.85);z-index:100;backdrop-filter:blur(8px);align-items:center;justify-content:center;padding:1rem;}
+  .modal-wrap.active{display:flex;}
+  .modal-card{background:var(--card);border:1px solid var(--border);border-radius:18px;max-width:440px;width:100%;padding:1.25rem;display:flex;flex-direction:column;gap:.9rem;max-height:92dvh;overflow-y:auto;}
+  .modal-preview-box{width:100%;max-height:42dvh;background:#000;border-radius:12px;overflow:hidden;display:flex;align-items:center;justify-content:center;}
+  #modalImg{max-width:100%;max-height:42dvh;object-fit:contain;}
+  .slider-row{display:flex;align-items:center;gap:.6rem;width:100%;}
+  .slider-lbl{font-size:.78rem;color:var(--muted);width:75px;flex-shrink:0;}
+  input[type=range]{flex:1;height:5px;border-radius:3px;appearance:none;background:rgba(255,255,255,.15);outline:none;}
+  input[type=range]::-webkit-slider-thumb{appearance:none;width:20px;height:20px;border-radius:50%;background:var(--accent);cursor:pointer;border:2px solid rgba(0,0,0,.3);}
+  .slider-val{font-size:.75rem;color:var(--text);width:30px;text-align:right;font-family:monospace;}
+
+  /* Progress Bar */
+  .progress-wrap{width:100%;height:10px;background:rgba(255,255,255,.1);border-radius:5px;overflow:hidden;}
+  .progress-bar{width:0%;height:100%;background:linear-gradient(90deg,var(--primary),var(--accent));border-radius:5px;transition:width .2s;}
+  .spinner{display:inline-block;width:24px;height:24px;border:3px solid rgba(255,255,255,.2);border-top-color:#fff;border-radius:50%;animation:spin .8s linear infinite;}
   @keyframes spin{to{transform:rotate(360deg);}}
-  .screen{display:none;} .screen.active{display:contents;}
-  footer{margin-top:1.5rem;font-size:.68rem;color:var(--muted);text-align:center;}
+  footer{margin-top:auto;padding-top:1.5rem;font-size:.7rem;color:var(--muted);text-align:center;}
 </style>
 </head>
 <body>
-<!-- WELCOME SCREEN -->
-<div id="s-welcome" class="screen active">
-<div class="card">
-  <div class="logo">📷</div>
-  <div class="brand">GRANDSTORES</div>
-  <div class="sub">Digital Photo Printing</div>
-  <h2>Send Your Photo to Print</h2>
-  <p>Select or take a photo and send it directly to the print kiosk. Your image is deleted immediately after printing.</p>
-  <input type="file" id="fileInput" accept="image/*" capture="environment" style="display:none">
-  <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">
-    📁 Choose Photo
-  </button>
-  <button class="btn btn-ghost" onclick="document.getElementById('fileInput').setAttribute('capture','environment'); document.getElementById('fileInput').click()">
-    📸 Take Photo
-  </button>
-</div>
-</div>
+<div class="app-container">
 
-<!-- EDIT SCREEN -->
-<div id="s-edit" class="screen">
-<div class="card">
-  <div style="font-size:.8rem;color:var(--muted);align-self:flex-start;">Step 2 of 2 · Adjust &amp; Send</div>
-  <div class="preview-wrap">
-    <img id="previewImg" src="" alt="Your photo">
-  </div>
-  <div class="sliders">
-    <div class="slider-row">
-      <span class="slider-lbl">Brightness</span>
-      <input type="range" id="slBri" min="-50" max="50" value="0" oninput="updatePreview()">
-      <span class="slider-val" id="valBri">0</span>
-    </div>
-    <div class="slider-row">
-      <span class="slider-lbl">Contrast</span>
-      <input type="range" id="slCon" min="-50" max="50" value="0" oninput="updatePreview()">
-      <span class="slider-val" id="valCon">0</span>
-    </div>
-    <div class="slider-row">
-      <span class="slider-lbl">Saturation</span>
-      <input type="range" id="slSat" min="-50" max="50" value="0" oninput="updatePreview()">
-      <span class="slider-val" id="valSat">0</span>
+  <!-- SCREEN 1: WELCOME -->
+  <div id="s-welcome" class="screen active">
+    <div class="card">
+      <div class="brand-header">
+        <div class="logo-badge">📷</div>
+        <div>
+          <div class="brand">GRANDSTORES</div>
+          <div class="sub">Professional Photo Printing</div>
+        </div>
+      </div>
+      <h2>Send Photos to Print</h2>
+      <p>Select multiple photos from your gallery or take a new photo to send directly to the Photo Studio station.</p>
+
+      <div class="info-box">
+        <span>🔒</span>
+        <span>Your photos are sent securely over local Wi-Fi and automatically deleted after printing.</span>
+      </div>
+
+      <!-- Hidden file pickers -->
+      <!-- galleryInput has multiple and NO capture attribute so it opens phone gallery -->
+      <input type="file" id="galleryInput" accept="image/jpeg,image/png,image/webp,image/heic,image/*" multiple style="display:none">
+      <!-- cameraInput has capture attribute to trigger camera -->
+      <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none">
+
+      <button class="btn btn-primary" style="font-size:1.05rem;padding:1rem;" onclick="document.getElementById('galleryInput').click()">
+        🖼️ Choose from Gallery
+      </button>
+
+      <button class="btn btn-ghost" style="font-size:1rem;padding:.9rem;" onclick="document.getElementById('cameraInput').click()">
+        📸 Take a Photo
+      </button>
     </div>
   </div>
-  <p style="font-size:.72rem;">Adjustments shown as preview only. Final quality is applied at print.</p>
-  <button class="btn btn-accent" id="btnSend" onclick="sendPhoto()">
-    🖨️ Send to Print
-  </button>
-  <button class="btn btn-ghost" onclick="showScreen('s-welcome')" style="font-size:.85rem;padding:.6rem;">← Choose Different Photo</button>
-</div>
-</div>
 
-<!-- SENDING SCREEN -->
-<div id="s-sending" class="screen">
-<div class="card">
-  <div style="font-size:3rem;margin-bottom:.5rem;">⏳</div>
-  <h2>Sending...</h2>
-  <p>Please wait while your photo is sent to the print kiosk.</p>
-  <div class="spinner"></div>
-</div>
-</div>
+  <!-- SCREEN 2: GALLERY REVIEW & SELECT -->
+  <div id="s-gallery" class="screen">
+    <div class="gallery-header">
+      <div>
+        <h2 style="text-align:left;font-size:1.15rem;">Review Photos</h2>
+        <div style="font-size:.75rem;color:var(--muted);" id="gallerySub">Tap photo to edit · Check to select</div>
+      </div>
+      <div style="display:flex;gap:.4rem;">
+        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('galleryInput').click()">+ Gallery</button>
+        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('cameraInput').click()">+ Camera</button>
+      </div>
+    </div>
 
-<!-- THANKYOU SCREEN -->
-<div id="s-done" class="screen">
-<div class="card">
-  <div style="font-size:3.5rem;margin-bottom:.5rem;">🎉</div>
-  <h2>Photo Sent!</h2>
-  <p>Your photo has been sent to the print queue. The operator will print it shortly.<br><br>Your image is <strong style="color:var(--success)">automatically deleted</strong> from the system after printing.</p>
-  <div class="status status-ok">✓ Successfully sent to print queue</div>
-  <button class="btn btn-primary" onclick="resetApp()">📷 Send Another Photo</button>
-</div>
-</div>
+    <div class="gallery-grid" id="photoGrid"></div>
 
-<footer>GrandStores Digital · Privacy-first photo kiosk</footer>
+    <div class="sticky-bar">
+      <button class="btn btn-accent" id="btnSendAll" onclick="startUpload()">
+        🚀 Send to Studio (<span id="sendCount">0</span>)
+      </button>
+    </div>
+  </div>
+
+  <!-- SCREEN 3: UPLOADING -->
+  <div id="s-uploading" class="screen">
+    <div class="card" style="padding:2.5rem 1.5rem;text-align:center;">
+      <div class="spinner"></div>
+      <h2 id="uploadTitle">Sending Photos...</h2>
+      <p id="uploadMsg">Preparing high-resolution images for the Studio...</p>
+      <div class="progress-wrap">
+        <div class="progress-bar" id="uploadBar"></div>
+      </div>
+      <div style="font-size:.78rem;color:var(--muted);" id="uploadPercent">0%</div>
+    </div>
+  </div>
+
+  <!-- SCREEN 4: SUCCESS -->
+  <div id="s-done" class="screen">
+    <div class="card" style="padding:2.5rem 1.5rem;text-align:center;">
+      <div style="font-size:3.5rem;">🎉</div>
+      <h2>Photos Sent to Studio!</h2>
+      <p>Your photos have been successfully received at the Photo Studio station.<br><br>The operator can now crop, enhance, and print your photos.</p>
+      <button class="btn btn-primary" onclick="resetGallery()">
+        📷 Send More Photos
+      </button>
+    </div>
+  </div>
+
+  <!-- MODAL: PHOTO PREVIEW & ADJUST -->
+  <div class="modal-wrap" id="modalWrap">
+    <div class="modal-card">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <strong style="font-size:.95rem;">Adjust Photo</strong>
+        <button class="btn-icon btn-ghost" onclick="closeModal()">✕</button>
+      </div>
+      <div class="modal-preview-box">
+        <img id="modalImg" src="" alt="Preview">
+      </div>
+      <div style="display:flex;gap:.5rem;justify-content:center;">
+        <button class="btn btn-ghost btn-sm" onclick="rotateCurrentPhoto(90)">↺ Rotate 90°</button>
+        <button class="btn btn-ghost btn-sm" onclick="resetCurrentAdjustments()">Reset</button>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:.5rem;">
+        <div class="slider-row">
+          <span class="slider-lbl">Brightness</span>
+          <input type="range" id="mBri" min="-50" max="50" value="0" oninput="updateModalPreview()">
+          <span class="slider-val" id="mValBri">0</span>
+        </div>
+        <div class="slider-row">
+          <span class="slider-lbl">Contrast</span>
+          <input type="range" id="mCon" min="-50" max="50" value="0" oninput="updateModalPreview()">
+          <span class="slider-val" id="mValCon">0</span>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;padding-top:.4rem;border-top:1px solid var(--border);">
+        <span style="font-size:.85rem;color:var(--muted);">Print Copies:</span>
+        <div class="qty-ctrl">
+          <button class="qty-btn" onclick="changeCurrentQty(-1)">-</button>
+          <span class="qty-val" id="mQtyVal" style="padding:0 8px;">1</span>
+          <button class="qty-btn" onclick="changeCurrentQty(1)">+</button>
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="saveModalEdits()">Done</button>
+    </div>
+  </div>
+
+  <footer>GrandStores Digital · Privacy-first photo kiosk</footer>
+</div>
 
 <script>
   const UPLOAD_URL = '$uploadUrl';
-  let originalFile = null;
+  let photos = []; // Array of { id, file, url, rotation, brightness, contrast, qty, selected }
+  let currentPhotoId = null;
 
   function showScreen(id) {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-    document.getElementById(id).classList.add('active');
+    const sc = document.getElementById(id);
+    if (sc) sc.classList.add('active');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
-  document.getElementById('fileInput').addEventListener('change', function(e) {
-    const file = e.target.files[0];
-    if (!file) return;
-    originalFile = file;
-    const url = URL.createObjectURL(file);
-    document.getElementById('previewImg').src = url;
-    // Reset sliders
-    ['slBri','slCon','slSat'].forEach(id => document.getElementById(id).value = 0);
-    ['valBri','valCon','valSat'].forEach(id => document.getElementById(id).textContent = '0');
-    updatePreview();
-    showScreen('s-edit');
+  // Handle Gallery Selection (multiple files)
+  document.getElementById('galleryInput').addEventListener('change', function(e) {
+    handleFiles(e.target.files);
+    e.target.value = '';
   });
 
-  function updatePreview() {
-    const bri = parseInt(document.getElementById('slBri').value);
-    const con = parseInt(document.getElementById('slCon').value);
-    const sat = parseInt(document.getElementById('slSat').value);
-    document.getElementById('valBri').textContent = (bri >= 0 ? '+' : '') + bri;
-    document.getElementById('valCon').textContent = (con >= 0 ? '+' : '') + con;
-    document.getElementById('valSat').textContent = (sat >= 0 ? '+' : '') + sat;
-    // CSS filter preview
-    const img = document.getElementById('previewImg');
-    img.style.filter = 'brightness(' + (1 + bri/100) + ') contrast(' + (1 + con/100) + ') saturate(' + (1 + sat/100) + ')';
+  // Handle Camera Capture (single file)
+  document.getElementById('cameraInput').addEventListener('change', function(e) {
+    handleFiles(e.target.files);
+    e.target.value = '';
+  });
+
+  function handleFiles(fileList) {
+    if (!fileList || fileList.length === 0) return;
+    for (let i = 0; i < fileList.length; i++) {
+      const file = fileList[i];
+      if (!file.type.startsWith('image/')) continue;
+      const id = 'p_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
+      photos.push({
+        id: id,
+        file: file,
+        name: file.name || ('photo_' + (photos.length + 1) + '.jpg'),
+        url: URL.createObjectURL(file),
+        rotation: 0,
+        brightness: 0,
+        contrast: 0,
+        qty: 1,
+        selected: true
+      });
+    }
+    renderGallery();
+    showScreen('s-gallery');
   }
 
-  async function sendPhoto() {
-    if (!originalFile) return;
-    showScreen('s-sending');
+  function renderGallery() {
+    const grid = document.getElementById('photoGrid');
+    grid.innerHTML = '';
 
-    // Compress + encode to base64
-    try {
-      const canvas = document.createElement('canvas');
-      const img = new Image();
-      const url  = URL.createObjectURL(originalFile);
-      await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
+    if (photos.length === 0) {
+      showScreen('s-welcome');
+      return;
+    }
 
-      // Limit to 2000px on longest side for upload
-      const maxPx = 2000;
-      const scale = Math.min(1, maxPx / Math.max(img.naturalWidth, img.naturalHeight));
-      canvas.width  = Math.round(img.naturalWidth  * scale);
-      canvas.height = Math.round(img.naturalHeight * scale);
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    photos.forEach((p, idx) => {
+      const card = document.createElement('div');
+      card.className = 'photo-card ' + (p.selected ? 'selected' : '');
+      card.id = 'card_' + p.id;
 
-      const base64 = canvas.toDataURL('image/jpeg', 0.88);
+      const filterStr = 'brightness(' + (1 + p.brightness / 100) + ') contrast(' + (1 + p.contrast / 100) + ')';
+      const transformStr = 'rotate(' + p.rotation + 'deg)';
 
-      const resp = await fetch(UPLOAD_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageData: base64 })
-      });
+      card.innerHTML = `
+        <div class="photo-thumb-wrap" onclick="openModal('${p.id}')">
+          <img class="photo-thumb" src="${p.url}" style="filter:${filterStr};transform:${transformStr};" alt="${p.name}">
+          <div class="photo-check" onclick="event.stopPropagation(); toggleSelect('${p.id}')">
+            ${p.selected ? '✓' : ''}
+          </div>
+        </div>
+        <div class="photo-actions">
+          <div class="qty-ctrl">
+            <button class="qty-btn" onclick="updateQty('${p.id}', -1)">-</button>
+            <span class="qty-val" id="qty_${p.id}">${p.qty}</span>
+            <button class="qty-btn" onclick="updateQty('${p.id}', 1)">+</button>
+          </div>
+          <div class="photo-btn-bar">
+            <button class="btn btn-ghost btn-icon btn-sm" title="Rotate" onclick="rotatePhoto('${p.id}', 90)">↺</button>
+            <button class="btn btn-ghost btn-icon btn-sm" title="Delete" style="color:var(--error);" onclick="removePhoto('${p.id}')">✕</button>
+          </div>
+        </div>
+      `;
+      grid.appendChild(card);
+    });
 
-      if (resp.ok) {
-        showScreen('s-done');
-      } else {
-        throw new Error('Server error: ' + resp.status);
-      }
-    } catch (err) {
-      showScreen('s-edit');
-      alert('Failed to send: ' + err.message + '\n\nPlease ensure you are on the same WiFi network as the kiosk.');
+    updateSendButton();
+  }
+
+  function toggleSelect(id) {
+    const p = photos.find(x => x.id === id);
+    if (!p) return;
+    p.selected = !p.selected;
+    const card = document.getElementById('card_' + id);
+    if (card) {
+      card.classList.toggle('selected', p.selected);
+      const chk = card.querySelector('.photo-check');
+      if (chk) chk.textContent = p.selected ? '✓' : '';
+    }
+    updateSendButton();
+  }
+
+  function updateQty(id, delta) {
+    const p = photos.find(x => x.id === id);
+    if (!p) return;
+    p.qty = Math.max(1, Math.min(20, (p.qty || 1) + delta));
+    const el = document.getElementById('qty_' + id);
+    if (el) el.textContent = p.qty;
+    updateSendButton();
+  }
+
+  function rotatePhoto(id, deg) {
+    const p = photos.find(x => x.id === id);
+    if (!p) return;
+    p.rotation = (p.rotation + deg) % 360;
+    const card = document.getElementById('card_' + id);
+    if (card) {
+      const img = card.querySelector('.photo-thumb');
+      if (img) img.style.transform = 'rotate(' + p.rotation + 'deg)';
     }
   }
 
-  function resetApp() {
-    originalFile = null;
-    document.getElementById('fileInput').value = '';
-    document.getElementById('previewImg').src = '';
+  function removePhoto(id) {
+    photos = photos.filter(x => x.id !== id);
+    renderGallery();
+  }
+
+  function updateSendButton() {
+    const sel = photos.filter(p => p.selected);
+    const totalPrints = sel.reduce((sum, p) => sum + (p.qty || 1), 0);
+    const btnText = document.getElementById('sendCount');
+    if (btnText) btnText.textContent = sel.length + (sel.length === 1 ? ' photo' : ' photos');
+    const sendBtn = document.getElementById('btnSendAll');
+    if (sendBtn) {
+      sendBtn.disabled = (sel.length === 0);
+      sendBtn.style.opacity = (sel.length === 0 ? '0.4' : '1');
+    }
+  }
+
+  // Modal Preview & Adjust
+  function openModal(id) {
+    const p = photos.find(x => x.id === id);
+    if (!p) return;
+    currentPhotoId = id;
+    const modalImg = document.getElementById('modalImg');
+    modalImg.src = p.url;
+    document.getElementById('mBri').value = p.brightness;
+    document.getElementById('mCon').value = p.contrast;
+    document.getElementById('mValBri').textContent = (p.brightness >= 0 ? '+' : '') + p.brightness;
+    document.getElementById('mValCon').textContent = (p.contrast >= 0 ? '+' : '') + p.contrast;
+    document.getElementById('mQtyVal').textContent = p.qty;
+    updateModalPreview();
+    document.getElementById('modalWrap').classList.add('active');
+  }
+
+  function closeModal() {
+    document.getElementById('modalWrap').classList.remove('active');
+    currentPhotoId = null;
+  }
+
+  function updateModalPreview() {
+    const p = photos.find(x => x.id === currentPhotoId);
+    if (!p) return;
+    const bri = parseInt(document.getElementById('mBri').value);
+    const con = parseInt(document.getElementById('mCon').value);
+    document.getElementById('mValBri').textContent = (bri >= 0 ? '+' : '') + bri;
+    document.getElementById('mValCon').textContent = (con >= 0 ? '+' : '') + con;
+
+    const modalImg = document.getElementById('modalImg');
+    modalImg.style.filter = 'brightness(' + (1 + bri/100) + ') contrast(' + (1 + con/100) + ')';
+    modalImg.style.transform = 'rotate(' + p.rotation + 'deg)';
+  }
+
+  function rotateCurrentPhoto(deg) {
+    const p = photos.find(x => x.id === currentPhotoId);
+    if (!p) return;
+    p.rotation = (p.rotation + deg) % 360;
+    updateModalPreview();
+  }
+
+  function resetCurrentAdjustments() {
+    document.getElementById('mBri').value = 0;
+    document.getElementById('mCon').value = 0;
+    const p = photos.find(x => x.id === currentPhotoId);
+    if (p) p.rotation = 0;
+    updateModalPreview();
+  }
+
+  function changeCurrentQty(delta) {
+    const p = photos.find(x => x.id === currentPhotoId);
+    if (!p) return;
+    p.qty = Math.max(1, Math.min(20, (p.qty || 1) + delta));
+    document.getElementById('mQtyVal').textContent = p.qty;
+  }
+
+  function saveModalEdits() {
+    const p = photos.find(x => x.id === currentPhotoId);
+    if (p) {
+      p.brightness = parseInt(document.getElementById('mBri').value);
+      p.contrast = parseInt(document.getElementById('mCon').value);
+    }
+    closeModal();
+    renderGallery();
+  }
+
+  // Upload Engine
+  async function startUpload() {
+    const sel = photos.filter(p => p.selected);
+    if (sel.length === 0) return;
+
+    showScreen('s-uploading');
+    const uploadBar = document.getElementById('uploadBar');
+    const uploadPercent = document.getElementById('uploadPercent');
+    const uploadMsg = document.getElementById('uploadMsg');
+
+    const total = sel.length;
+    let successCount = 0;
+
+    for (let i = 0; i < total; i++) {
+      const p = sel[i];
+      const percent = Math.round(((i) / total) * 100);
+      uploadBar.style.width = percent + '%';
+      uploadPercent.textContent = percent + '%';
+      uploadMsg.textContent = 'Sending photo ' + (i + 1) + ' of ' + total + '...';
+
+      try {
+        const base64 = await processPhotoForUpload(p);
+        const resp = await fetch(UPLOAD_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            imageData: base64,
+            filename: p.name,
+            qty: p.qty || 1
+          })
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        successCount++;
+      } catch (err) {
+        console.error('Upload failed for photo ' + (i + 1), err);
+      }
+    }
+
+    uploadBar.style.width = '100%';
+    uploadPercent.textContent = '100%';
+
+    if (successCount > 0) {
+      showScreen('s-done');
+    } else {
+      showScreen('s-gallery');
+      alert('Could not send photos. Please make sure your phone is connected to the same Wi-Fi network as the Studio PC.');
+    }
+  }
+
+  async function processPhotoForUpload(p) {
+    const img = new Image();
+    await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = p.url; });
+
+    const maxPx = 2400; // Sharp 300 DPI for standard photo prints
+    let w = img.naturalWidth;
+    let h = img.naturalHeight;
+    const scale = Math.min(1, maxPx / Math.max(w, h));
+    w = Math.round(w * scale);
+    h = Math.round(h * scale);
+
+    const canvas = document.createElement('canvas');
+    const rot = (p.rotation || 0) % 360;
+
+    if (rot === 90 || rot === 270) {
+      canvas.width = h;
+      canvas.height = w;
+    } else {
+      canvas.width = w;
+      canvas.height = h;
+    }
+
+    const ctx = canvas.getContext('2d');
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.rotate((rot * Math.PI) / 180);
+    ctx.drawImage(img, -w / 2, -h / 2, w, h);
+
+    // Apply brightness/contrast if adjusted
+    if (p.brightness !== 0 || p.contrast !== 0) {
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imgData.data;
+      const bFactor = p.brightness * 2.55;
+      const cFactor = (259 * (p.contrast * 2.55 + 255)) / (255 * (259 - p.contrast * 2.55));
+      for (let j = 0; j < data.length; j += 4) {
+        data[j]   = Math.min(255, Math.max(0, cFactor * (data[j] - 128) + 128 + bFactor));
+        data[j+1] = Math.min(255, Math.max(0, cFactor * (data[j+1] - 128) + 128 + bFactor));
+        data[j+2] = Math.min(255, Math.max(0, cFactor * (data[j+2] - 128) + 128 + bFactor));
+      }
+      ctx.putImageData(imgData, 0, 0);
+    }
+
+    return canvas.toDataURL('image/jpeg', 0.90);
+  }
+
+  function resetGallery() {
+    photos = [];
+    currentPhotoId = null;
+    document.getElementById('galleryInput').value = '';
+    document.getElementById('cameraInput').value = '';
     showScreen('s-welcome');
   }
 </script>

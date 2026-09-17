@@ -1469,6 +1469,237 @@ function handleIncomingCameraPhoto(f) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+//  MOBILE CUSTOMER UPLOADS & STUDIO PRO INTEGRATION
+// ─────────────────────────────────────────────────────────────
+let mobileAutoIngest = true;
+let knownMobileFiles = new Set();
+let mobilePollTimer = null;
+let mobileReceivedCount = 0;
+let mobileQrUrl = '';
+let mobileWifiSsid = '';
+let mobileStudioQRInstance = null;
+
+function initMobileUploads() {
+  const btnHeader = document.getElementById('btnOpenMobileModal');
+  if (btnHeader) btnHeader.addEventListener('click', openMobileStudioModal);
+
+  const btnStudio = document.getElementById('btnOpenStudioMobileModal');
+  if (btnStudio) btnStudio.addEventListener('click', openMobileStudioModal);
+
+  const btnClose = document.getElementById('btnCloseMobileStudioModal');
+  if (btnClose) btnClose.addEventListener('click', closeMobileStudioModal);
+
+  const btnClose2 = document.getElementById('btnCloseMobileStudioModal2');
+  if (btnClose2) btnClose2.addEventListener('click', closeMobileStudioModal);
+
+  const btnRefresh = document.getElementById('btnRefreshMobilePhotos');
+  if (btnRefresh) btnRefresh.addEventListener('click', pollMobileUploads);
+
+  const btnImportAll = document.getElementById('btnImportAllMobile');
+  if (btnImportAll) btnImportAll.addEventListener('click', importAllMobileToStudio);
+
+  const chkAuto = document.getElementById('chkMobileAutoIngest');
+  if (chkAuto) {
+    chkAuto.addEventListener('change', (e) => {
+      mobileAutoIngest = e.target.checked;
+      showToast(`Mobile Auto-Load ${mobileAutoIngest ? 'Enabled' : 'Disabled'}`, 'info');
+    });
+  }
+
+  const qrUrlEl = document.getElementById('mobileStudioQRUrl');
+  if (qrUrlEl) {
+    qrUrlEl.addEventListener('click', () => {
+      if (mobileQrUrl) {
+        navigator.clipboard.writeText(mobileQrUrl).then(() => {
+          qrUrlEl.style.color = 'var(--success)';
+          setTimeout(() => { qrUrlEl.style.color = ''; }, 1200);
+          showToast('Copied Mobile URL to clipboard', 'info');
+        });
+      }
+    });
+  }
+
+  // Start polling for mobile customer uploads every 2 seconds
+  if (mobilePollTimer) clearInterval(mobilePollTimer);
+  mobilePollTimer = setInterval(pollMobileUploads, 2000);
+  pollMobileUploads();
+}
+
+async function pollMobileUploads() {
+  try {
+    const res = await fetch('/api/mobile-photos');
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data || !Array.isArray(data.files)) return;
+
+    // Process from oldest to newest
+    const sorted = [...data.files].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    let newArrivedCount = 0;
+
+    for (const f of sorted) {
+      if (!knownMobileFiles.has(f.filePath)) {
+        knownMobileFiles.add(f.filePath);
+        newArrivedCount++;
+        handleIncomingMobilePhoto(f);
+      }
+    }
+
+    // Update badge numbers
+    mobileReceivedCount = knownMobileFiles.size;
+    const livePill = document.getElementById('mobileLivePill');
+    if (livePill) livePill.textContent = `${mobileReceivedCount} Received`;
+
+    const headerBadge = document.getElementById('headerMobileCountBadge');
+    if (headerBadge) {
+      headerBadge.textContent = mobileReceivedCount;
+      headerBadge.style.display = mobileReceivedCount > 0 ? 'inline-block' : 'none';
+    }
+
+    const modalCount = document.getElementById('mobileModalCount');
+    if (modalCount) modalCount.textContent = mobileReceivedCount;
+
+  } catch (err) {}
+}
+
+function handleIncomingMobilePhoto(f) {
+  // Add item to Modal list
+  const listEl = document.getElementById('mobileModalPhotosList');
+  const emptyEl = document.getElementById('mobileModalEmptyMsg');
+  if (emptyEl) emptyEl.style.display = 'none';
+
+  if (listEl) {
+    const itemEl = document.createElement('div');
+    itemEl.style.cssText = 'display:flex;align-items:center;gap:8px;background:rgba(0,0,0,0.35);padding:6px 10px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);';
+    const timeStr = f.timestamp ? new Date(f.timestamp).toLocaleTimeString() : '';
+    const sizeStr = formatBytes(f.fileSize || 0);
+
+    itemEl.innerHTML = `
+      <i class="fa-solid fa-mobile-screen" style="color: #06b6d4; font-size: 1.1rem;"></i>
+      <div style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+        <strong style="color: var(--text-primary); font-family: monospace; font-size: 0.8rem;">${escapeHtml(f.fileName)}</strong>
+        <div style="font-size: 0.65rem; color: var(--text-muted);">${timeStr} · ${sizeStr} · Qty: ${f.qty || 1}</div>
+      </div>
+      <button class="btn btn-xs btn-primary" onclick="loadSingleMobilePhoto('${escapeHtml(f.filePath)}','${escapeHtml(f.fileName)}','${escapeHtml(f.url)}',${f.fileSize || 0},${f.qty || 1})" style="padding:2px 8px; font-size:0.7rem;">
+        Load
+      </button>
+    `;
+    listEl.insertBefore(itemEl, listEl.firstChild);
+  }
+
+  // If in Studio Pro mode and Auto-Ingest is active:
+  if (mobileAutoIngest) {
+    loadSingleMobilePhoto(f.filePath, f.fileName, f.url, f.fileSize, f.qty);
+  }
+}
+
+function loadSingleMobilePhoto(filePath, fileName, url, fileSize, qty) {
+  // Check if already in filesQueue
+  const exists = filesQueue.some(i => i.path === filePath);
+  if (exists) return;
+
+  const newItem = {
+    id: 'mob_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+    name: fileName,
+    file: null,
+    handle: null,
+    path: filePath,
+    url: url,
+    sizeStr: formatBytes(fileSize || 0),
+    checked: true,
+    passed: false,
+    qty: qty || 1,
+    printMode: 'overall',
+    manualCropEdited: false,
+    crop: { x: 0, y: 0, w: 1, h: 1 },
+    isCropped: false,
+    editParams: getDefaultEditParams(),
+    dateModified: new Date(),
+    isMobileUpload: true
+  };
+
+  // Prepend so newest mobile photo appears first in Studio filmstrip
+  filesQueue.unshift(newItem);
+  renderSourceExplorer();
+  updateGrid();
+  updateUIState();
+
+  if (!activeItem) {
+    activeItem = newItem;
+    syncSidebarToActiveItem();
+  }
+
+  addLog(`[Mobile Customer] Loaded ${fileName} (Qty: ${qty || 1}) into Studio Pro queue`, 'success');
+  showToast(`📱 Mobile photo received: ${fileName}`, 'success');
+}
+
+async function importAllMobileToStudio() {
+  try {
+    const res = await fetch('/api/mobile-photos');
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data || !Array.isArray(data.files)) return;
+
+    let loaded = 0;
+    for (const f of data.files) {
+      if (!filesQueue.some(i => i.path === f.filePath)) {
+        loadSingleMobilePhoto(f.filePath, f.fileName, f.url, f.fileSize, f.qty);
+        loaded++;
+      }
+    }
+    showToast(`Loaded ${loaded} mobile photo(s) into Studio Pro`, 'success');
+  } catch (err) {
+    showToast('Failed to import mobile photos: ' + err.message, 'error');
+  }
+}
+
+async function openMobileStudioModal() {
+  const modal = document.getElementById('mobileStudioModal');
+  if (!modal) return;
+  modal.style.display = 'flex';
+
+  try {
+    const resp = await fetch('/api/info');
+    const info = await resp.json();
+    const ip = info.ip || '127.0.0.1';
+    const port = info.port || 8080;
+    mobileQrUrl = `http://${ip}:${port}/customer`;
+    mobileWifiSsid = info.wifiSsid || 'Wi-Fi Network / Hotspot';
+
+    const urlEl = document.getElementById('mobileStudioQRUrl');
+    if (urlEl) urlEl.textContent = mobileQrUrl;
+
+    const wifiEl = document.getElementById('mobileWifiNameDisplay');
+    if (wifiEl) wifiEl.textContent = mobileWifiSsid;
+
+    const container = document.getElementById('mobileStudioQRContainer');
+    if (container) {
+      container.innerHTML = '';
+      if (typeof QRCode !== 'undefined') {
+        mobileStudioQRInstance = new QRCode(container, {
+          text: mobileQrUrl,
+          width: 180,
+          height: 180,
+          colorDark: '#000000',
+          colorLight: '#ffffff',
+          correctLevel: QRCode.CorrectLevel.M
+        });
+      } else {
+        container.innerHTML = '<div style="color:#64748b;font-size:0.75rem;text-align:center;">QR Generator Ready<br>' + escapeHtml(mobileQrUrl) + '</div>';
+      }
+    }
+  } catch (err) {
+    console.error('Failed to get mobile info', err);
+  }
+
+  pollMobileUploads();
+}
+
+function closeMobileStudioModal() {
+  const modal = document.getElementById('mobileStudioModal');
+  if (modal) modal.style.display = 'none';
+}
+
 async function selectSourceFolder() {
   // Primary: Trigger direct native Windows directory picker via HTML5 input
   if (els.sourceDirInput) {
@@ -3938,6 +4169,9 @@ function appStartup() {
 
   // Initialize Wi-Fi Camera Tool and live status
   initCameraIngest();
+
+  // Initialize Mobile Customer Ingest & QR Monitor
+  initMobileUploads();
 
   checkSecurityContext();
 }

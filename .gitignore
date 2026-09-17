@@ -6,6 +6,8 @@ Camera_Incoming/*
 !Camera_Incoming/.gitkeep
 Printed_Photos/*
 !Printed_Photos/.gitkeep
+Mobile_Uploads/*
+!Mobile_Uploads/.gitkeep
 
 # Backup and config flags
 *.bak
